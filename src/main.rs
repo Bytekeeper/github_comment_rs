@@ -114,7 +114,7 @@ fn main() {
         };
         create_ref(client, owner, repo, &ref_to_create).unwrap();
 
-        let comment_file = &format!("_data/comments/{}.yaml", comment_id);
+        let comment_file = &format!("_data/comments/{}/{}.yaml", post.r#ref, comment_id);
         //        println!("Creating file {}", comment_file);
         /*
         let post = Post {
