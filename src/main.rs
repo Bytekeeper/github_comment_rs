@@ -55,6 +55,95 @@ struct CreatePR {
     base: String,
 }
 
+struct GitHub<'a> {
+    client: reqwest::blocking::Client,
+    owner: &'a str,
+    repo: &'a str,
+}
+
+const GITHUB_BASE_URL : &str = "https://api.github.com/repos/";
+
+impl GitHub<'_> {
+    fn new<'a>(token: &'a str, owner: &'a str, repo: &'a str) -> GitHub<'a> {
+        let mut headers = header::HeaderMap::new();
+        headers.insert(
+            header::ACCEPT,
+            header::HeaderValue::from_static("application/vnd.github.v3+json"),
+        );
+        headers.insert(
+            header::USER_AGENT,
+            header::HeaderValue::from_static("Comment-Bridger"),
+        );
+        headers.insert(
+            header::AUTHORIZATION,
+            header::HeaderValue::from_str(token).unwrap(),
+        );
+
+        let client = reqwest::blocking::Client::builder()
+            .default_headers(headers)
+            .build()
+            .unwrap();
+
+        GitHub {
+            owner,
+            repo,
+            client,
+        }
+    }
+
+    fn get_branch(&self, branch: &str) -> reqwest::Result<reqwest::blocking::Response> {
+        let url = url::Url::parse(
+            format!(
+                "{}{}/{}/branches/{}",
+                GITHUB_BASE_URL, self.owner, self.repo, branch
+            )
+            .as_str(),
+        )
+        .unwrap();
+        self.client.get(url).send()
+    }
+
+    fn create_ref(&self, create_ref: &CreateRef) -> reqwest::Result<reqwest::blocking::Response> {
+        let url = url::Url::parse(
+            format!(
+                "{}{}/{}/git/refs",
+                GITHUB_BASE_URL, self.owner, self.repo
+            )
+            .as_str(),
+        )
+        .unwrap();
+        self.client.post(url).json(create_ref).send()
+    }
+
+    fn create_file(
+        &self,
+        path: &str,
+        create_file: &CreateFile,
+    ) -> reqwest::Result<reqwest::blocking::Response> {
+        let url = url::Url::parse(
+            format!(
+                "{}{}/{}/contents/{}",
+                GITHUB_BASE_URL, self.owner, self.repo, path
+            )
+            .as_str(),
+        )
+        .unwrap();
+        self.client.put(url).json(create_file).send()
+    }
+
+    fn create_pr(&self, create_pr: &CreatePR) -> reqwest::Result<reqwest::blocking::Response> {
+        let url = url::Url::parse(
+            format!(
+                "{}{}/{}/pulls",
+                GITHUB_BASE_URL, self.owner, self.repo
+            )
+            .as_str(),
+        )
+        .unwrap();
+        self.client.post(url).json(create_pr).send()
+    }
+}
+
 fn main() {
     let token = &env::var("TOKEN").expect("TOKEN missing");
     let owner = &env::var("REPO_OWNER").expect("REPO_OWNER missing");
@@ -64,88 +153,68 @@ fn main() {
     let content_length: usize = env::var("CONTENT_LENGTH")
         .ok()
         .and_then(|cl| cl.parse::<usize>().ok())
-        .unwrap_or(0);
+        .expect("Content length expected");
+    assert!(content_length < 100 * 1024, "Comment size limit exceeded");
     let mut body = vec![0; content_length];
-    stdin().read_exact(&mut body).unwrap();
+    stdin().read_exact(&mut body).expect("Could not read body");
 
     let post: Post = serde_urlencoded::from_bytes(body.as_slice()).unwrap();
-    let mut headers = header::HeaderMap::new();
-    headers.insert(
-        header::ACCEPT,
-        header::HeaderValue::from_static("application/vnd.github.v3+json"),
-    );
-    headers.insert(
-        header::USER_AGENT,
-        header::HeaderValue::from_static("Comment-Bridger"),
-    );
-    headers.insert(
-        header::AUTHORIZATION,
-        header::HeaderValue::from_str(token).unwrap(),
-    );
 
-    let time = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-    let mut rng = thread_rng();
-    let comment_id = format!("{}_{}", time, rng.gen_range(0, 999999999));
-
-    let comment = Comment {
-        id: comment_id.to_string(),
-        r#ref: post.r#ref.to_string(),
-        message: post.message.to_string(),
-        name: post.name.to_string(),
-        url: post.url.to_string(),
-        date: time,
-    };
-    let client = &reqwest::blocking::Client::builder()
-        .default_headers(headers)
-        .build()
-        .unwrap();
-    let master = &branch(&client, owner, repo, "master")
+    let github = GitHub::new(token, owner, repo);
+    let master = &github
+        .get_branch("master")
         .unwrap()
         .json::<HashMap<String, serde_json::Value>>()
         .unwrap()["commit"]["sha"];
     if let serde_json::Value::String(sha) = master {
-        //        println!("Creating branch comments/{}", comment_id);
-        let ref_to_create = CreateRef {
-            r#ref: format!("refs/heads/comments/{}", comment_id),
-            sha: sha.to_string(),
-        };
-        create_ref(client, owner, repo, &ref_to_create).unwrap();
+        let time = SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        let mut rng = thread_rng();
+        let comment_id = format!("{}_{}", time, rng.gen_range(0, 999999999));
+
+        github
+            .create_ref(&CreateRef {
+                r#ref: format!("refs/heads/comments/{}", comment_id),
+                sha: sha.to_string(),
+            })
+            .unwrap();
 
         let comment_file = &format!("_data/comments/{}/{}.yaml", post.r#ref, comment_id);
-        //        println!("Creating file {}", comment_file);
-        /*
-        let post = Post {
-            id: comment_id.to_string(),
-            r#ref: Some("/post/1".to_string()),
-            message: "Test-Message".to_string(),
-            name: "Mr. X".to_string(),
-            url: None,
-            date: Some(time),
-        };
-        */
         let branch_name = format!("comments/{}", comment_id);
-        let file = CreateFile {
-            message: "Comment".to_string(),
-            content: encode(&serde_yaml::to_string(&comment).unwrap()),
-            branch: branch_name.to_string(),
-            committer: UserRef {
-                name: owner.to_string(),
-                email: owner_email.to_string(),
-            },
+
+        let comment = Comment {
+            id: comment_id.to_string(),
+            r#ref: post.r#ref.to_string(),
+            message: post.message.to_string(),
+            name: post.name.to_string(),
+            url: post.url.to_string(),
+            date: time,
         };
 
-        create_file(client, owner, repo, comment_file, &file).unwrap();
+        github
+            .create_file(
+                comment_file,
+                &CreateFile {
+                    message: "Comment".to_string(),
+                    content: encode(&serde_yaml::to_string(&comment).unwrap()),
+                    branch: branch_name.to_string(),
+                    committer: UserRef {
+                        name: owner.to_string(),
+                        email: owner_email.to_string(),
+                    },
+                },
+            )
+            .unwrap();
 
-        //        println!("Creating PR {}", comment_file);
-        let pr = CreatePR {
-            title: format!("Comment {}", &comment_id),
-            head: branch_name.to_string(),
-            base: "master".to_string(),
-        };
-        create_pr(client, owner, repo, &pr).unwrap();
+        github
+            .create_pr(&CreatePR {
+                title: format!("Comment {}", &comment_id),
+                head: branch_name.to_string(),
+                base: "master".to_string(),
+            })
+            .unwrap();
     } else {
         panic!("Invalid ref!");
     }
@@ -157,68 +226,6 @@ fn main() {
         .unwrap();
     let buf = response_to_buf(response);
     stdout().write_all(&buf).unwrap();
-}
-
-fn branch(
-    client: &reqwest::blocking::Client,
-    owner: &str,
-    repo: &str,
-    branch: &str,
-) -> reqwest::Result<reqwest::blocking::Response> {
-    let url = url::Url::parse(
-        format!(
-            "https://api.github.com/repos/{}/{}/branches/{}",
-            owner, repo, branch
-        )
-        .as_str(),
-    )
-    .unwrap();
-    client.get(url).send()
-}
-
-fn create_ref(
-    client: &reqwest::blocking::Client,
-    owner: &str,
-    repo: &str,
-    create_ref: &CreateRef,
-) -> reqwest::Result<reqwest::blocking::Response> {
-    let url = url::Url::parse(
-        format!("https://api.github.com/repos/{}/{}/git/refs", owner, repo).as_str(),
-    )
-    .unwrap();
-    client.post(url).json(create_ref).send()
-}
-
-// PUT /repos/:owner/:repo/contents/:path
-fn create_file(
-    client: &reqwest::blocking::Client,
-    owner: &str,
-    repo: &str,
-    path: &str,
-    create_file: &CreateFile,
-) -> reqwest::Result<reqwest::blocking::Response> {
-    let url = url::Url::parse(
-        format!(
-            "https://api.github.com/repos/{}/{}/contents/{}",
-            owner, repo, path
-        )
-        .as_str(),
-    )
-    .unwrap();
-    client.put(url).json(create_file).send()
-}
-
-// POST /repos/:owner/:repo/pulls
-fn create_pr(
-    client: &reqwest::blocking::Client,
-    owner: &str,
-    repo: &str,
-    create_pr: &CreatePR,
-) -> reqwest::Result<reqwest::blocking::Response> {
-    let url =
-        url::Url::parse(format!("https://api.github.com/repos/{}/{}/pulls", owner, repo).as_str())
-            .unwrap();
-    client.post(url).json(create_pr).send()
 }
 
 fn response_to_buf(response: Response<()>) -> Vec<u8> {
