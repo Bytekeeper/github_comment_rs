@@ -133,7 +133,7 @@ async fn post_comment_service(req: Request<Body>) -> hyper::Result<Response<Body
     info!("New comment from {} added", comment.name);
 
     Ok(Response::builder()
-        .status(hyper::StatusCode::SEE_OTHER)
+        .status(hyper::StatusCode::CREATED)
         .header(ACCESS_CONTROL_ALLOW_METHODS, "OPTIONS, POST")
         .header(ACCESS_CONTROL_ALLOW_ORIGIN, "*")
         .header(ACCESS_CONTROL_ALLOW_HEADERS, "content-type")
