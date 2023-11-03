@@ -7,7 +7,7 @@ use hyper::header::{
 use hyper::service::{make_service_fn, service_fn};
 use hyper::{Body, Request, Response, Server, StatusCode};
 use log::{debug, info};
-use octocrab::models::repos::{CommitAuthor, Object};
+use octocrab::models::repos::{CommitAuthor, ContentItems, Object};
 use octocrab::params::repos::Reference;
 use rand::{thread_rng, Rng};
 use std::fmt::Write;
@@ -79,10 +79,8 @@ async fn post_comment_service(req: Request<Body>) -> hyper::Result<Response<Body
     let content_items = match repo.get_content().path(&path).send().await {
         Ok(content_items) => content_items,
         Err(_) => {
-            return Ok(Response::builder()
-                .status(hyper::StatusCode::BAD_REQUEST)
-                .body(format!("Invalid path: {}", path).into())
-                .unwrap());
+            info!("Assuming no comments present yet at {}", path);
+            ContentItems { items: Vec::new() }
         }
     };
     assert!(content_items.items.len() <= 1);
