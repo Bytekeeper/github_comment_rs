@@ -24,16 +24,20 @@ struct Comment<'a> {
 }
 
 #[derive(Deserialize)]
-pub struct GitHubConfig {
+pub struct Config {
+    pub listen: std::net::SocketAddr,
     pub token: String,
     pub owner: String,
     pub repo: String,
 }
 
-pub static CONFIG: OnceLock<GitHubConfig> = OnceLock::new();
+pub static CONFIG: OnceLock<Config> = OnceLock::new();
 
 fn main() -> anyhow::Result<()> {
-    env_logger::init();
+    env_logger::Builder::new()
+        .filter_level(log::LevelFilter::Info)
+        .try_init()
+        .expect("Failed to initialize logging");
     let Ok(_) = CONFIG.set(
         serde_yaml::from_slice(&std::fs::read("config.yaml").context("Loading config file")?)
             .context("Parsing config file")?,

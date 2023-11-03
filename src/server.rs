@@ -12,7 +12,9 @@ use octocrab::params::repos::Reference;
 use rand::{thread_rng, Rng};
 use std::fmt::Write;
 use std::net::SocketAddr;
+use std::time::Duration;
 use std::time::SystemTime;
+use tower::limit::{rate::Rate, RateLimit};
 
 async fn post_comment_service(req: Request<Body>) -> hyper::Result<Response<Body>> {
     if req.method() == hyper::Method::OPTIONS {
@@ -149,10 +151,15 @@ pub async fn main() -> anyhow::Result<()> {
             .build()?,
     );
 
-    let addr = SocketAddr::from(([127, 0, 0, 1], 3000));
+    let addr = SocketAddr::from(CONFIG.get().unwrap().listen);
+    info!("Listening on {}", addr);
 
-    let post_comment_service =
-        make_service_fn(|_conn| async { Ok::<_, Infallible>(service_fn(post_comment_service)) });
+    let post_comment_service = make_service_fn(|_conn| async {
+        Ok::<_, Infallible>(RateLimit::new(
+            service_fn(post_comment_service),
+            Rate::new(1, Duration::from_secs(10)),
+        ))
+    });
     let server = Server::bind(&addr).serve(post_comment_service);
     Ok(server.await?)
 }

@@ -18,3 +18,4 @@ octocrab = "0.31.2"
 http-body = "0.4.5"
 env_logger = "0.10.0"
 log = "0.4.20"
+tower = { version = "0.4.13", features = ["limit"] }
